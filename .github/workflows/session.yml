@@ -21,10 +21,10 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm install
 
       - name: Generate Bus2 session
         env:
           ONIBUS_API_BASE: ${{ secrets.ONIBUS_API_BASE }}
           ONIBUS_API_KEY: ${{ secrets.ONIBUS_API_KEY }}
-        run: node worker.js
+        run: node scripts/refresh.js
