@@ -1,0 +1,13 @@
+{
+  "name": "bus2-session-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Session maintenance worker",
+  "main": "scripts/refresh.js",
+  "scripts": {
+    "start": "node scripts/refresh.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
