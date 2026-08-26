@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: bus2-session-refresh
+  cancel-in-progress: false
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
@@ -20,11 +24,9 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Generate Bus2 session
+      - name: Deliver session
         env:
           ONIBUS_API_BASE: ${{ secrets.ONIBUS_API_BASE }}
-          ONIBUS_API_KEY: ${{ secrets.ONIBUS_API_KEY }}
+          BUS2_SESSION_UPDATE_KEY: ${{ secrets.BUS2_SESSION_UPDATE_KEY }}
+          BUS2_RID: ${{ secrets.BUS2_RID }}
         run: node scripts/refresh.js
