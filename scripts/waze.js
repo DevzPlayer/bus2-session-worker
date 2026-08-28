@@ -6,13 +6,6 @@ const KEY = process.env.WAZE_UPDATE_KEY;
 if (!API) throw new Error('ONIBUS_API_BASE ausente');
 if (!KEY) throw new Error('WAZE_UPDATE_KEY ausente');
 
-const bbox = {
-  top: -3.02,
-  bottom: -3.20,
-  left: -60.15,
-  right: -59.90
-};
-
 function kmh(ms) {
   return Number(((Number(ms) || 0) * 3.6).toFixed(2));
 }
@@ -21,11 +14,7 @@ function kmh(ms) {
   console.log('🚀 Iniciando Chromium');
 
   const browser = await chromium.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-dev-shm-usage'
-    ]
+    headless: true
   });
 
   const context = await browser.newContext({
@@ -39,7 +28,52 @@ function kmh(ms) {
 
   const page = await context.newPage();
 
-  console.log('🌎 Abrindo Waze');
+  let raw = null;
+
+  page.on('response', async response => {
+    const url = response.url();
+
+    if (!url.includes('/live-map/api/georss')) {
+      return;
+    }
+
+    console.log('');
+    console.log('📡 GEORSS DETECTADO');
+    console.log('HTTP:', response.status());
+    console.log('URL:', url);
+
+    if (response.status() !== 200) {
+      return;
+    }
+
+    try {
+      const json = await response.json();
+
+      if (
+        json &&
+        (
+          Array.isArray(json.jams) ||
+          Array.isArray(json.alerts)
+        )
+      ) {
+        raw = json;
+
+        console.log(
+          '✅ Dados capturados:',
+          'jams=' + (json.jams?.length || 0),
+          'alerts=' + (json.alerts?.length || 0),
+          'users=' + (json.users?.length || 0)
+        );
+      }
+    } catch (e) {
+      console.log(
+        '⚠️ Não foi possível interpretar resposta:',
+        e.message
+      );
+    }
+  });
+
+  console.log('🌎 Abrindo Waze Manaus');
 
   await page.goto(
     'https://www.waze.com/live-map/directions?to=ll.-3.1190275%2C-60.0217314',
@@ -49,46 +83,38 @@ function kmh(ms) {
     }
   );
 
-  await page.waitForTimeout(12000);
+  console.log('⏳ Esperando o próprio Waze carregar trânsito...');
 
-  console.log('📡 Consultando georss');
+  for (let i = 0; i < 45; i++) {
+    if (raw) break;
 
-  const resposta = await page.evaluate(async bbox => {
-    const p = new URLSearchParams({
-      top: String(bbox.top),
-      bottom: String(bbox.bottom),
-      left: String(bbox.left),
-      right: String(bbox.right),
-      env: 'row',
-      types: 'alerts,traffic,users'
-    });
+    await page.waitForTimeout(1000);
 
-    const r = await fetch(
-      `/live-map/api/georss?${p}`,
-      {
-        credentials: 'include'
-      }
-    );
-
-    return {
-      status: r.status,
-      body: await r.text()
-    };
-  }, bbox);
-
-  console.log('Waze HTTP:', resposta.status);
-
-  if (resposta.status !== 200) {
-    console.error(
-      resposta.body.slice(0, 1000)
-    );
-
-    throw new Error(
-      `Waze retornou HTTP ${resposta.status}`
-    );
+    if ((i + 1) % 5 === 0) {
+      console.log(
+        `⏳ ${i + 1}s...`
+      );
+    }
   }
 
-  const raw = JSON.parse(resposta.body);
+  if (!raw) {
+    console.log('');
+    console.log('❌ Nenhum GEORSS válido foi recebido.');
+
+    console.log(
+      'Página:',
+      await page.title()
+    );
+
+    console.log(
+      'URL final:',
+      page.url()
+    );
+
+    await browser.close();
+
+    process.exit(2);
+  }
 
   const jams = (raw.jams || []).map(j => ({
     id:
@@ -113,7 +139,7 @@ function kmh(ms) {
       null,
 
     nivel:
-      j.level ?? 0,
+      Number(j.level || 0),
 
     status:
       j.type === 'ROAD_CLOSED'
@@ -127,10 +153,10 @@ function kmh(ms) {
               : 'normal',
 
     comprimentoMetros:
-      j.length ?? 0,
+      Number(j.length || 0),
 
     velocidadeMs:
-      j.speed ?? 0,
+      Number(j.speed || 0),
 
     velocidadeKmh:
       kmh(j.speed),
@@ -186,12 +212,10 @@ function kmh(ms) {
       null,
 
     votos:
-      a.nThumbsUp ??
-      0,
+      Number(a.nThumbsUp || 0),
 
     comentarios:
-      a.nComments ??
-      0,
+      Number(a.nComments || 0),
 
     confiabilidade:
       a.confidence ??
@@ -210,10 +234,11 @@ function kmh(ms) {
       null
   }));
 
-  const closures = jams.filter(j =>
-    j.tipo === 'ROAD_CLOSED' ||
-    j.status === 'bloqueado'
-  );
+  const closures =
+    jams.filter(j =>
+      j.tipo === 'ROAD_CLOSED' ||
+      j.status === 'bloqueado'
+    );
 
   const snapshot = {
     meta: {
@@ -222,8 +247,6 @@ function kmh(ms) {
 
       coletadoEm:
         Date.now(),
-
-      bbox,
 
       totais: {
         jams:
@@ -236,7 +259,7 @@ function kmh(ms) {
           closures.length,
 
         users:
-          (raw.users || []).length
+          raw.users?.length || 0
       }
     },
 
@@ -245,13 +268,16 @@ function kmh(ms) {
     closures
   };
 
+  console.log('');
+  console.log('==============================');
   console.log('🚗 Trânsito:', jams.length);
   console.log('⚠️ Alertas:', alerts.length);
   console.log('🚧 Bloqueios:', closures.length);
+  console.log('==============================');
 
-  console.log('☁️ Enviando para API');
+  console.log('☁️ Enviando snapshot para API...');
 
-  const r = await fetch(
+  const response = await fetch(
     new URL(
       '/internal/waze/manaus',
       API
@@ -275,21 +301,28 @@ function kmh(ms) {
     }
   );
 
-  const texto = await r.text();
+  const texto =
+    await response.text();
 
-  console.log('API HTTP:', r.status);
+  console.log(
+    'API HTTP:',
+    response.status
+  );
+
   console.log(texto);
 
-  if (!r.ok) {
+  if (!response.ok) {
     throw new Error(
-      `API retornou ${r.status}`
+      `API recusou snapshot: HTTP ${response.status}`
     );
   }
 
   await browser.close();
 
-  console.log('✅ MANAUS ATUALIZADO');
+  console.log('');
+  console.log('✅ WAZE → API CONCLUÍDO');
 })().catch(err => {
-  console.error('❌', err);
+  console.error('');
+  console.error('❌ Collector:', err);
   process.exit(1);
 });
